@@ -76,3 +76,7 @@ The main objective of WattStop is to make EV charging more convenient during jou
 WattStop aims to provide a convenient way for EV drivers to locate residential charging points during their journeys while allowing homeowners to make their charging facilities available to others. The platform can help improve access to charging options and encourage better utilization of existing residential charging infrastructure.
 
 *Note: The architecture represents the proposed system design. The final technology stack and integrations will depend on the implementation.*
+
+### Dashboard preview
+
+Open `index.html` in a modern browser, or serve the repository with `python3 -m http.server 8000` and visit `http://localhost:8000`. The responsive driver and homeowner dashboards are a static preview: map locations and charger listings are illustrative, and accounts, live search, publishing, and bookings are not connected to a backend. The preview uses Google Fonts when available and falls back to system fonts offline.
