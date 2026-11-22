@@ -18,10 +18,10 @@ router.get('/nearby', getNearbyChargers);
 router.post('/along-route', getChargersAlongRoute);
 router.get('/:id', getChargerById);
 
-// Protected Homeowner management endpoints
-router.post('/', protect, authorize('homeowner'), createCharger);
-router.get('/host/my-listings', protect, authorize('homeowner'), getMyListings);
-router.put('/:id', protect, authorize('homeowner'), updateCharger);
-router.patch('/:id/toggle-status', protect, authorize('homeowner'), toggleStatus);
+// Charger registration & management endpoints
+router.post('/', protect, createCharger);
+router.get('/host/my-listings', protect, getMyListings);
+router.put('/:id', protect, updateCharger);
+router.patch('/:id/toggle-status', protect, toggleStatus);
 
 module.exports = router;

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 
 export default function InteractiveMap({
@@ -12,31 +12,35 @@ export default function InteractiveMap({
   isPickerMode = false,
   pickerLocation = null,
   onPickLocation = () => {},
-  height = '420px'
+  height = '420px',
+  isNavigating = false,
+  onStopNavigation = () => {}
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersLayerRef = useRef(null);
   const routeLayerRef = useRef(null);
   const pickerMarkerRef = useRef(null);
+  const navMarkerRef = useRef(null);
+
+  const [simProgress, setSimProgress] = useState(0);
+  const animFrameRef = useRef(null);
 
   // Initialize Map
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
-      // Default to Chennai center from reference UI
       const initialCenter = userLocation
         ? [userLocation.lat, userLocation.lng]
         : [13.0827, 80.2707];
 
       const map = L.map(mapContainerRef.current, {
         center: initialCenter,
-        zoom: 12,
+        zoom: 13,
         zoomControl: true
       });
 
-      // OpenStreetMap attribution tile layer
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution:
           '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
@@ -48,9 +52,7 @@ export default function InteractiveMap({
       routeLayerRef.current = L.layerGroup().addTo(map);
     }
 
-    return () => {
-      // Keep instance intact across renders, clean up on unmount
-    };
+    return () => {};
   }, []);
 
   // Handle map click for coordinate picker mode (Homeowner charger registration)
@@ -73,28 +75,113 @@ export default function InteractiveMap({
   // Update Route Polyline
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
-    if (!routeLayer) return;
+    const map = mapInstanceRef.current;
+    if (!routeLayer || !map) return;
 
     routeLayer.clearLayers();
 
     if (routeCoordinates && routeCoordinates.length > 0) {
-      // OSRM coordinates are [lng, lat], Leaflet expects [lat, lng]
       const latLngs = routeCoordinates.map(([lng, lat]) => [lat, lng]);
 
-      const polyline = L.polyline(latLngs, {
-        color: '#10b981',
-        weight: 5,
-        opacity: 0.85,
-        dashArray: null,
+      // Route line styling with shadow effect
+      L.polyline(latLngs, {
+        color: '#047857',
+        weight: 7,
+        opacity: 0.4,
         lineJoin: 'round'
       }).addTo(routeLayer);
 
-      const map = mapInstanceRef.current;
-      if (map) {
-        map.fitBounds(polyline.getBounds(), { padding: [50, 50] });
+      const mainLine = L.polyline(latLngs, {
+        color: '#10b981',
+        weight: 5,
+        opacity: 0.95,
+        lineJoin: 'round'
+      }).addTo(routeLayer);
+
+      if (!isNavigating) {
+        map.fitBounds(mainLine.getBounds(), { padding: [50, 50] });
       }
     }
-  }, [routeCoordinates]);
+  }, [routeCoordinates, isNavigating]);
+
+  // Turn-by-Turn GPS Navigation Simulation along Route
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (!isNavigating || !routeCoordinates || routeCoordinates.length < 2) {
+      if (navMarkerRef.current) {
+        navMarkerRef.current.remove();
+        navMarkerRef.current = null;
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+      return;
+    }
+
+    // Convert route to [lat, lng]
+    const latLngs = routeCoordinates.map(([lng, lat]) => [lat, lng]);
+    let currentIndex = 0;
+    let progress = 0;
+
+    const carIcon = L.divIcon({
+      className: '',
+      html: `
+        <div style="background:#252b24;color:#b9ee45;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-size:18px;border:3px solid #b9ee45;box-shadow:0 0 15px rgba(185,238,69,0.8);transform:scale(1.1);">
+          🚘
+        </div>
+      `,
+      iconSize: [38, 38],
+      iconAnchor: [19, 19]
+    });
+
+    if (!navMarkerRef.current) {
+      navMarkerRef.current = L.marker(latLngs[0], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
+    }
+
+    let lastTime = performance.now();
+
+    const animateMovement = (time) => {
+      const delta = time - lastTime;
+      lastTime = time;
+
+      // Speed: advance index smoothly
+      currentIndex += delta * 0.008;
+
+      if (currentIndex >= latLngs.length - 1) {
+        currentIndex = latLngs.length - 1;
+        if (navMarkerRef.current) {
+          navMarkerRef.current.setLatLng(latLngs[currentIndex]);
+        }
+        setSimProgress(100);
+        return;
+      }
+
+      const lowerIdx = Math.floor(currentIndex);
+      const upperIdx = Math.min(lowerIdx + 1, latLngs.length - 1);
+      const ratio = currentIndex - lowerIdx;
+
+      const curLat = latLngs[lowerIdx][0] + (latLngs[upperIdx][0] - latLngs[lowerIdx][0]) * ratio;
+      const curLng = latLngs[lowerIdx][1] + (latLngs[upperIdx][1] - latLngs[lowerIdx][1]) * ratio;
+
+      if (navMarkerRef.current) {
+        navMarkerRef.current.setLatLng([curLat, curLng]);
+      }
+
+      // Smooth pan map following vehicle (Google Maps style)
+      map.panTo([curLat, curLng], { animate: true, duration: 0.1 });
+      setSimProgress(Math.round((currentIndex / (latLngs.length - 1)) * 100));
+
+      animFrameRef.current = requestAnimationFrame(animateMovement);
+    };
+
+    animFrameRef.current = requestAnimationFrame(animateMovement);
+
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [isNavigating, routeCoordinates]);
 
   // Update Picker Pin
   useEffect(() => {
@@ -138,10 +225,10 @@ export default function InteractiveMap({
     markersLayer.clearLayers();
 
     // 1. User Location Pin
-    if (userLocation) {
+    if (userLocation && !isNavigating) {
       const userIcon = L.divIcon({
         className: '',
-        html: `<div class="user-gps-pin" title="Your Location"></div>`,
+        html: `<div class="user-gps-pin" title="Your Live Location"></div>`,
         iconSize: [16, 16],
         iconAnchor: [8, 8]
       });
@@ -155,9 +242,9 @@ export default function InteractiveMap({
     if (destinationLocation) {
       const destIcon = L.divIcon({
         className: '',
-        html: `<div style="background:#ef4444;color:#fff;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:14px;border:2px solid #fff;box-shadow:0 3px 8px rgba(0,0,0,0.3);">🏁</div>`,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
+        html: `<div style="background:#ef4444;color:#fff;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:14px;border:2px solid #fff;box-shadow:0 3px 8px rgba(0,0,0,0.3);">🏁</div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
       });
 
       L.marker([destinationLocation.lat, destinationLocation.lng], { icon: destIcon })
@@ -213,18 +300,51 @@ export default function InteractiveMap({
       });
     });
 
-    // If a charger was specifically selected or zoomed into
-    if (selectedCharger && selectedCharger.location?.coordinates) {
+    if (selectedCharger && selectedCharger.location?.coordinates && !isNavigating) {
       const [sLng, sLat] = selectedCharger.location.coordinates;
       map.setView([sLat, sLng], 14, { animate: true });
     }
-  }, [chargers, userLocation, destinationLocation, selectedCharger]);
+  }, [chargers, userLocation, destinationLocation, selectedCharger, isNavigating]);
 
   return (
-    <div
-      ref={mapContainerRef}
-      style={{ height, width: '100%', minHeight: '300px' }}
-      className="rounded-lg overflow-hidden border border-[#eceee9] relative z-0"
-    />
+    <div className="relative">
+      <div
+        ref={mapContainerRef}
+        style={{ height, width: '100%', minHeight: '300px' }}
+        className="rounded-lg overflow-hidden border border-[#eceee9] relative z-0"
+      />
+
+      {/* Live Turn-by-Turn HUD Overlay (like Google Maps) */}
+      {isNavigating && (
+        <div className="absolute top-3 left-3 right-3 z-[1000] bg-[#252b24]/95 text-white p-3.5 rounded-lg shadow-2xl backdrop-blur-md border border-lime-400 flex items-center justify-between animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-lime-400 text-black flex items-center justify-center font-bold text-lg animate-pulse">
+              🧭
+            </div>
+            <div>
+              <div className="text-xs font-bold text-lime-400 uppercase tracking-wider flex items-center gap-2">
+                <span>Google Maps Style Live Navigation</span>
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-ping"></span>
+              </div>
+              <div className="text-sm font-extrabold mt-0.5">
+                En Route to {destinationLocation?.name || 'Selected Destination'}
+              </div>
+              <div className="text-[10px] text-gray-300">
+                Route Progress: {simProgress}% · Map auto-tracking vehicle GPS position
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onStopNavigation}
+              className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 text-white font-bold text-xs transition"
+            >
+              Exit Navigation
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

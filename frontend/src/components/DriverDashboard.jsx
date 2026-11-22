@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import InteractiveMap from './InteractiveMap';
 import { chargerApi, mapApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -7,7 +7,9 @@ export default function DriverDashboard({
   onSelectCharger,
   onBookCharger,
   onViewBookings,
-  onOpenHowItWorks
+  onOpenHowItWorks,
+  pendingVoiceAction = null,
+  onClearVoiceAction = () => {}
 }) {
   const { user } = useAuth();
 
@@ -18,6 +20,11 @@ export default function DriverDashboard({
   const [destinationSuggestions, setDestinationSuggestions] = useState([]);
   const [isSearchingDest, setIsSearchingDest] = useState(false);
   const [isGpsLoading, setIsGpsLoading] = useState(false);
+  const [isLiveGpsActive, setIsLiveGpsActive] = useState(false);
+  const gpsWatchIdRef = useRef(null);
+
+  // Live Navigation Simulation (Google Maps style)
+  const [isNavigating, setIsNavigating] = useState(false);
 
   // Route calculation
   const [routeData, setRouteData] = useState(null);
@@ -48,11 +55,11 @@ export default function DriverDashboard({
       if (maxPrice && !onlyFree) filters.maxPrice = maxPrice;
 
       if (routeData && routeData.coordinates?.length > 0) {
-        // Find along route
+        // Find along route corridor
         const res = await chargerApi.getAlongRoute(routeData.coordinates, searchCorridorKm, filters);
         setChargers(res.chargers || []);
       } else {
-        // Find nearby
+        // Find nearby current position
         const res = await chargerApi.getNearby(userLocation.lat, userLocation.lng, 35, filters);
         setChargers(res.chargers || []);
       }
@@ -65,35 +72,71 @@ export default function DriverDashboard({
 
   useEffect(() => {
     fetchChargers();
-  }, [userLocation, routeData, acDcFilter, connectorFilter, onlyFree, minCapacity, maxPrice]);
+  }, [userLocation.lat, userLocation.lng, routeData, acDcFilter, connectorFilter, onlyFree, minCapacity, maxPrice]);
 
-  // Request GPS Permission and detect location
-  const handleDetectGps = () => {
+  // Handle incoming Voice Assistant Action (e.g. "Guide me to Adyar" or route requests)
+  useEffect(() => {
+    if (pendingVoiceAction) {
+      if (pendingVoiceAction.destination) {
+        setDestinationInput(pendingVoiceAction.destination);
+        handleCalculateRouteTo(pendingVoiceAction.destination);
+      }
+      if (pendingVoiceAction.chargers && pendingVoiceAction.chargers.length > 0) {
+        setChargers(pendingVoiceAction.chargers);
+        setSelectedCharger(pendingVoiceAction.chargers[0]);
+      }
+      onClearVoiceAction();
+    }
+  }, [pendingVoiceAction]);
+
+  // Continuous Live GPS Watch Tracker
+  const handleToggleLiveGps = () => {
     if (!navigator.geolocation) {
       alert('Geolocation is not supported by your browser.');
       return;
     }
+
+    if (isLiveGpsActive) {
+      if (gpsWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+        gpsWatchIdRef.current = null;
+      }
+      setIsLiveGpsActive(false);
+      return;
+    }
+
     setIsGpsLoading(true);
-    navigator.geolocation.getCurrentPosition(
+    const id = navigator.geolocation.watchPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
         const name = await mapApi.reverseGeocode(latitude, longitude);
         setUserLocation({ lat: latitude, lng: longitude, name });
         setIsGpsLoading(false);
+        setIsLiveGpsActive(true);
       },
       (err) => {
-        console.warn('GPS permission denied or unavailable, keeping default location.', err);
+        console.warn('GPS location error:', err);
         setIsGpsLoading(false);
-        alert('Could not access GPS. Please allow location permissions or enter location manually.');
+        setIsLiveGpsActive(false);
+        alert('Could not access live GPS. Please ensure location permission is enabled.');
       },
-      { timeout: 10000, enableHighAccuracy: true }
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
+    gpsWatchIdRef.current = id;
   };
+
+  useEffect(() => {
+    return () => {
+      if (gpsWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+      }
+    };
+  }, []);
 
   // Destination autocomplete search
   useEffect(() => {
     const timer = setTimeout(async () => {
-      if (destinationInput.trim().length >= 3) {
+      if (destinationInput.trim().length >= 3 && !isNavigating) {
         setIsSearchingDest(true);
         const results = await mapApi.geocodeSearch(destinationInput);
         setDestinationSuggestions(results);
@@ -104,7 +147,17 @@ export default function DriverDashboard({
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [destinationInput]);
+  }, [destinationInput, isNavigating]);
+
+  // Calculate route by destination text directly (for Voice Assistant or Quick Pills)
+  const handleCalculateRouteTo = async (destName) => {
+    setIsSearchingDest(true);
+    const results = await mapApi.geocodeSearch(destName);
+    setIsSearchingDest(false);
+    if (results && results.length > 0) {
+      await handleSelectDestination(results[0]);
+    }
+  };
 
   // Select destination and calculate route
   const handleSelectDestination = async (item) => {
@@ -117,7 +170,6 @@ export default function DriverDashboard({
     setDestinationInput(dest.name);
     setDestinationSuggestions([]);
 
-    // Calculate OSRM route
     setIsCalculatingRoute(true);
     const route = await mapApi.calculateRoute(userLocation.lng, userLocation.lat, dest.lng, dest.lat);
     if (route) {
@@ -133,6 +185,7 @@ export default function DriverDashboard({
     setDestinationInput('');
     setDestinationLocation(null);
     setRouteData(null);
+    setIsNavigating(false);
   };
 
   return (
@@ -148,9 +201,19 @@ export default function DriverDashboard({
               Find your next<br />good stop<span>.</span>
             </h2>
             <p>Discover a more personal way to charge. Find home chargers near you or along your route.</p>
-            <a className="primary-button" href="#route-planner">
-              Plan route & explore <span>↗</span>
-            </a>
+            <div className="flex flex-wrap items-center gap-3">
+              <a className="primary-button" href="#route-planner">
+                Plan route & explore <span>↗</span>
+              </a>
+              {routeData && !isNavigating && (
+                <button
+                  onClick={() => setIsNavigating(true)}
+                  className="bg-lime-400 hover:bg-lime-500 text-black font-extrabold text-xs px-4 py-3 rounded-md transition flex items-center gap-2 shadow-lg"
+                >
+                  <span>🧭</span> Start Google Maps Navigation
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="hero-art" aria-hidden="true">
@@ -180,7 +243,7 @@ export default function DriverDashboard({
             </div>
             <div className="side-icon">⌁</div>
             <h3>Where to next?</h3>
-            <p>Plan an EV trip and discover verified residential charging points along your drive.</p>
+            <p>Plan an EV trip with real-time GPS tracking and live navigation along your journey.</p>
           </div>
           <a className="text-link" href="#route-planner">
             Start journey search <span>→</span>
@@ -193,22 +256,29 @@ export default function DriverDashboard({
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#f2f4ef]">
           <div>
             <span className="mini-label">NAVIGATION & GPS</span>
-            <h3 className="text-lg font-bold font-display mt-1">Route-Based EV Charger Search</h3>
+            <h3 className="text-lg font-bold font-display mt-1">Route & Live GPS Navigation</h3>
           </div>
-          <button
-            onClick={handleDetectGps}
-            disabled={isGpsLoading}
-            className="flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-md bg-[#f0f3eb] hover:bg-[#e4ebdb] text-[#242b20] transition border border-[#dce3d5] self-start md:self-auto"
-          >
-            <span>📍</span> {isGpsLoading ? 'Detecting GPS...' : 'Use Current GPS Location'}
-          </button>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleToggleLiveGps}
+              className={`flex items-center gap-2 text-xs font-bold px-3.5 py-2 rounded-md transition border ${
+                isLiveGpsActive
+                  ? 'bg-green-600 text-white border-green-700 shadow-md animate-pulse'
+                  : 'bg-[#f0f3eb] hover:bg-[#e4ebdb] text-[#242b20] border-[#dce3d5]'
+              }`}
+            >
+              <span>{isLiveGpsActive ? '🟢' : '📍'}</span>
+              {isGpsLoading ? 'Locking GPS...' : isLiveGpsActive ? 'Live GPS Tracking Active' : 'Enable Live GPS Tracking'}
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           {/* Start Location */}
           <div className="relative">
             <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">
-              Start Location
+              Start Location (Live GPS Position)
             </label>
             <div className="flex items-center bg-[#f8f9f6] border border-[#e1e5dd] rounded-md px-3 py-2">
               <span className="text-sm mr-2 text-lime-700">🟢</span>
@@ -224,7 +294,7 @@ export default function DriverDashboard({
           {/* Destination Search with Autocomplete */}
           <div className="relative">
             <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">
-              Destination Point
+              Destination Point (or Ask AI: "Guide me to Adyar")
             </label>
             <div className="flex items-center bg-[#f8f9f6] border border-[#e1e5dd] rounded-md px-3 py-2 focus-within:ring-2 focus-within:ring-lime-400">
               <span className="text-sm mr-2 text-red-500">🏁</span>
@@ -232,7 +302,7 @@ export default function DriverDashboard({
                 type="text"
                 value={destinationInput}
                 onChange={(e) => setDestinationInput(e.target.value)}
-                placeholder="Search destination (e.g. Adyar, Velachery, Mahabalipuram)"
+                placeholder="Search destination (e.g. Adyar, Velachery, Besant Nagar)"
                 className="bg-transparent text-xs w-full font-medium focus:outline-none text-gray-800 placeholder-gray-400"
               />
               {destinationLocation && (
@@ -264,7 +334,7 @@ export default function DriverDashboard({
           </div>
         </div>
 
-        {/* Calculated Route Info Pill */}
+        {/* Calculated Route Info Pill & Navigation Toggle */}
         {routeData && (
           <div className="mt-4 p-3.5 bg-[#f0f5e9] border border-[#ddebce] rounded-md flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-4">
@@ -278,10 +348,18 @@ export default function DriverDashboard({
                 <strong className="text-sm text-[#1f2918]">{routeData.durationMinutes} mins</strong>
               </div>
             </div>
+
             <div className="flex items-center gap-2">
-              <span className="text-lime-800 font-semibold text-xs">
-                ⚡ Showing home chargers within {searchCorridorKm} km of route
-              </span>
+              <button
+                onClick={() => setIsNavigating(!isNavigating)}
+                className={`px-4 py-2 rounded-md font-bold text-xs transition flex items-center gap-2 shadow-sm ${
+                  isNavigating
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-[#252b24] hover:bg-black text-lime-400'
+                }`}
+              >
+                <span>{isNavigating ? '⏹ Exit Navigation' : '🧭 Start Google Maps Style Navigation'}</span>
+              </button>
             </div>
           </div>
         )}
@@ -292,7 +370,6 @@ export default function DriverDashboard({
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="font-bold text-gray-600 mr-1">Filter:</span>
 
-          {/* AC / DC */}
           <select
             value={acDcFilter}
             onChange={(e) => setAcDcFilter(e.target.value)}
@@ -303,7 +380,6 @@ export default function DriverDashboard({
             <option value="DC">DC Fast Charging</option>
           </select>
 
-          {/* Connector */}
           <select
             value={connectorFilter}
             onChange={(e) => setConnectorFilter(e.target.value)}
@@ -316,7 +392,6 @@ export default function DriverDashboard({
             <option value="Type 1">Type 1</option>
           </select>
 
-          {/* Free vs Paid Toggle */}
           <button
             onClick={() => setOnlyFree(!onlyFree)}
             className={`px-3 py-1.5 rounded border font-semibold transition ${
@@ -352,14 +427,18 @@ export default function DriverDashboard({
 
       {/* Discover Grid (Interactive Map + Chargers List) */}
       <div className="discover-grid">
-        {/* Interactive Leaflet Map */}
+        {/* Interactive Leaflet Map with Google Maps Movement Mode */}
         <div className="map-card shadow-sm">
           <div className="map-header">
             <div>
               <strong>Interactive Network Map</strong>
-              <small>Click any charger marker to inspect availability and book</small>
+              <small>
+                {isNavigating
+                  ? '🚘 Auto-tracking along calculated driving route (Google Maps Mode)'
+                  : 'Click any charger marker to inspect availability, pay via UPI/Cash/Card & book'}
+              </small>
             </div>
-            <span className="map-badge">LIVE LEAFLET / OSM</span>
+            <span className="map-badge">{isNavigating ? 'NAVIGATING' : 'LIVE LEAFLET / OSM'}</span>
           </div>
 
           <div className="p-2 bg-[#f8f9f6]">
@@ -371,7 +450,9 @@ export default function DriverDashboard({
               selectedCharger={selectedCharger}
               onSelectCharger={(charger) => setSelectedCharger(charger)}
               onBookCharger={(charger) => onBookCharger(charger)}
-              height="380px"
+              isNavigating={isNavigating}
+              onStopNavigation={() => setIsNavigating(false)}
+              height="400px"
             />
           </div>
         </div>
@@ -387,7 +468,7 @@ export default function DriverDashboard({
               <span className="text-gray-400">↗</span>
             </div>
 
-            <div className="max-h-[360px] overflow-y-auto divide-y divide-[#f0f1ee]">
+            <div className="max-h-[380px] overflow-y-auto divide-y divide-[#f0f1ee]">
               {isLoadingChargers ? (
                 <div className="p-8 text-center text-xs text-gray-400">Loading chargers from database...</div>
               ) : chargers.length === 0 ? (
@@ -411,7 +492,7 @@ export default function DriverDashboard({
                         <strong className="truncate">{charger.name}</strong>
                         <small>
                           {charger.city || 'Chennai'} · {charger.connectorType} · {charger.capacityKw} kW
-                          {charger.distanceKm ? ` · ${charger.distanceKm} km` : ''}
+                          {charger.distanceKm !== undefined ? ` · ${charger.distanceKm} km` : ''}
                           {charger.distanceFromRouteKm !== undefined
                             ? ` · ${charger.distanceFromRouteKm} km off route`
                             : ''}
@@ -460,7 +541,7 @@ export default function DriverDashboard({
           <div>
             <span className="mini-label">YOUR BOOKINGS</span>
             <h3>Manage your charging stops</h3>
-            <p>View upcoming reservations, active sessions, and booking history.</p>
+            <p>View upcoming reservations, active sessions, and booking QR entry passes.</p>
           </div>
           <span className="bottom-arrow">↗</span>
         </div>

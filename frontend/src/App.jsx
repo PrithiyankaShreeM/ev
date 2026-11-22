@@ -24,9 +24,15 @@ export default function App() {
   const [selectedChargerForBooking, setSelectedChargerForBooking] = useState(null);
 
   // Handle action triggers from Voice Assistant
+  const [pendingVoiceAction, setPendingVoiceAction] = useState(null);
+
   const handleVoiceActionTrigger = (actionResult) => {
     if (actionResult.booking) {
       setCurrentTab('bookings');
+    } else if (actionResult.type === 'ROUTE_GUIDANCE' || actionResult.destination) {
+      switchRole('driver');
+      setCurrentTab('overview');
+      setPendingVoiceAction(actionResult);
     }
   };
 
@@ -112,6 +118,8 @@ export default function App() {
                 onBookCharger={(charger) => setSelectedChargerForBooking(charger)}
                 onViewBookings={() => setCurrentTab('bookings')}
                 onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
+                pendingVoiceAction={pendingVoiceAction}
+                onClearVoiceAction={() => setPendingVoiceAction(null)}
               />
             )
           ) : (

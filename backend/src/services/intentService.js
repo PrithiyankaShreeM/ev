@@ -55,11 +55,20 @@ function parseVoiceIntent(rawText) {
     parameters.time = `${String(hour).padStart(2, '0')}:00`;
   }
 
+  // Extract destination location from route/navigation commands
+  const destMatch = lower.match(/(?:to|reach|towards|poga|ku)\s+([a-zA-Z\s]{3,20})/i);
+  if (destMatch && destMatch[1]) {
+    parameters.destination = destMatch[1].trim();
+  }
+
   // Extract locations
-  const knownLocations = ['anna nagar', 'adyar', 'velachery', 'omr', 'guindy', 't nagar', 'mylapore', 'tambaram'];
+  const knownLocations = ['anna nagar', 'adyar', 'velachery', 'omr', 'guindy', 't nagar', 'mylapore', 'tambaram', 'besant nagar', 'marina', 'airport'];
   for (const loc of knownLocations) {
     if (lower.includes(loc)) {
       parameters.location = loc.replace(/\b\w/g, (l) => l.toUpperCase());
+      if (!parameters.destination && (lower.includes('to ' + loc) || lower.includes('reach ' + loc) || lower.includes(loc + ' ku') || lower.includes(loc + ' poga'))) {
+        parameters.destination = parameters.location;
+      }
       break;
     }
   }
@@ -71,6 +80,18 @@ function parseVoiceIntent(rawText) {
     lower.includes('cancel pannu')
   ) {
     intent = 'CANCEL_BOOKING';
+  } else if (
+    lower.includes('route') ||
+    lower.includes('route-la') ||
+    lower.includes('along') ||
+    lower.includes('vazhila') ||
+    lower.includes('navigate') ||
+    lower.includes('directions') ||
+    lower.includes('vazhi kaatu') ||
+    lower.includes('take me to') ||
+    lower.includes('poga vazhi')
+  ) {
+    intent = 'FIND_ROUTE';
   } else if (
     lower.includes('my booking') ||
     lower.includes('show booking') ||

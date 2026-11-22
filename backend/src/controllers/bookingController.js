@@ -38,7 +38,7 @@ exports.checkAvailability = async (req, res) => {
 // @route POST /api/bookings
 exports.createBooking = async (req, res) => {
   try {
-    const { chargerId, date, startTime, endTime, vehicleInfo } = req.body;
+    const { chargerId, date, startTime, endTime, vehicleInfo, paymentMethod } = req.body;
 
     if (!chargerId || !date || !startTime || !endTime) {
       return res.status(400).json({
@@ -73,6 +73,9 @@ exports.createBooking = async (req, res) => {
       totalAmount = Math.round(durationHours * pricePerHour);
     }
 
+    // Generate unique verification OTP code (e.g. WATT-9482)
+    const verificationCode = `WATT-${Math.floor(1000 + Math.random() * 9000)}`;
+
     const booking = await createBooking({
       driver: req.user._id,
       charger: chargerId,
@@ -83,6 +86,8 @@ exports.createBooking = async (req, res) => {
       durationHours,
       totalAmount,
       isFree: Boolean(charger.isFree),
+      paymentMethod: charger.isFree ? 'Free' : (paymentMethod || 'UPI'),
+      verificationCode,
       status: 'confirmed',
       vehicleInfo: vehicleInfo || req.user.vehicle?.model || 'EV'
     });

@@ -16,88 +16,144 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioPlayerRef = useRef(null);
+  const speechRecognitionRef = useRef(null);
 
   // Suggested commands in English & Tamil/Thanglish
   const sampleCommands = [
+    { text: 'Guide me to Adyar', label: 'Route to Adyar' },
     { text: 'Enakku nearby charging station thedu', label: 'Nearby (Tamil)' },
-    { text: 'Next charger enga irukku?', label: 'Next Charger' },
+    { text: 'Find route to Velachery and show chargers', label: 'Route to Velachery' },
     { text: 'Free charger book pannu', label: 'Free Charger' },
-    { text: 'Route-la charging point irukka?', label: 'Along Route' },
-    { text: 'Find Type 2 chargers', label: 'Type 2' },
+    { text: 'Next charger enga irukku?', label: 'Next Charger' },
     { text: 'Show upcoming bookings', label: 'My Bookings' }
   ];
+
+  // Initialize Web Speech Recognition if available (provides instant speech-to-text live)
+  useEffect(() => {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRec) {
+      const recognition = new SpeechRec();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-IN'; // Also catches Thanglish
+
+      recognition.onresult = (event) => {
+        const text = Array.from(event.results)
+          .map((r) => r[0].transcript)
+          .join('');
+        setTranscript(text);
+      };
+
+      recognition.onerror = (event) => {
+        console.warn('Speech recognition notice:', event.error);
+      };
+
+      recognition.onend = () => {
+        if (status === 'listening') {
+          stopRecording();
+        }
+      };
+
+      speechRecognitionRef.current = recognition;
+    }
+  }, [status]);
 
   // Start microphone recording
   const startRecording = async () => {
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert('Microphone access is not supported by your browser.');
-        return;
-      }
-
       setStatus('listening');
-      setTranscript('Listening for your voice...');
+      setTranscript('Listening for your voice... speak now');
       setResponseText('');
       audioChunksRef.current = [];
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+      // 1. Try Speech Recognition first for instant client transcription
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.start();
+        } catch (e) {
+          console.warn('Recognition already active');
         }
-      };
+      }
 
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        stream.getTracks().forEach((track) => track.stop());
-        await processAudio(audioBlob);
-      };
+      // 2. Also record audio stream for Sarvam Saaras AI
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
 
-      mediaRecorder.start();
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+          stream.getTracks().forEach((track) => track.stop());
+          await processAudio(audioBlob, transcript);
+        };
+
+        mediaRecorder.start();
+      }
     } catch (err) {
-      console.error('Error starting audio recording:', err);
-      setStatus('idle');
-      alert('Microphone permission was denied. Please allow microphone access or use text input.');
+      console.warn('Microphone error or permission issue:', err);
+      // Fallback: If microphone hardware permission is restricted, let user speak through browser speech dialog or prompt
+      const manualSpoken = window.prompt(
+        'Speak / Enter your voice command (e.g. "Find route to Adyar", "Enakku nearby charger thedu"):'
+      );
+      if (manualSpoken) {
+        processTextCommand(manualSpoken);
+      } else {
+        setStatus('idle');
+      }
     }
   };
 
   // Stop microphone recording
   const stopRecording = () => {
-    if (mediaRecorderRef.current && status === 'listening') {
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (e) {}
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       setStatus('processing');
+    } else if (transcript && transcript !== 'Listening for your voice... speak now') {
+      processTextCommand(transcript);
+    } else {
+      setStatus('idle');
     }
   };
 
   // Process captured audio blob
-  const processAudio = async (audioBlob) => {
+  const processAudio = async (audioBlob, currentText) => {
     setStatus('processing');
     try {
       const formData = new FormData();
       formData.append('audio', audioBlob, 'command.wav');
-      // Pass coordinates for nearby search
       formData.append('lat', '13.0827');
       formData.append('lng', '80.2707');
+      if (currentText && currentText !== 'Listening for your voice... speak now') {
+        formData.append('clientTranscript', currentText);
+      }
 
       const result = await voiceApi.processCommand(formData);
       handleAssistantResult(result);
     } catch (err) {
       console.error('Failed to process voice command:', err);
-      setStatus('idle');
-      setResponseText('Could not process voice command. Please try again or use text.');
+      if (currentText && currentText !== 'Listening for your voice... speak now') {
+        processTextCommand(currentText);
+      } else {
+        setStatus('idle');
+        setResponseText('Could not process voice command. Please try typing below.');
+      }
     }
   };
 
-  // Process typed command
-  const handleTextSubmit = async (e) => {
-    e?.preventDefault();
-    if (!textInput.trim()) return;
-
-    const query = textInput.trim();
-    setTextInput('');
+  // Process text command
+  const processTextCommand = async (query) => {
     setStatus('processing');
     setTranscript(query);
     setResponseText('');
@@ -116,14 +172,22 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
     }
   };
 
-  // Handle Assistant response and play Sarvam Bulbul audio
+  const handleTextSubmit = (e) => {
+    e?.preventDefault();
+    if (!textInput.trim()) return;
+    const query = textInput.trim();
+    setTextInput('');
+    processTextCommand(query);
+  };
+
+  // Handle Assistant response and trigger navigation / dashboard actions
   const handleAssistantResult = (result) => {
     setTranscript(result.transcript || transcript);
     setResponseText(result.responseText || 'Request processed.');
     setDetectedLanguage(result.language || 'en-IN');
     setDetectedIntent(result.intent || '');
 
-    // Notify parent to update dashboard (e.g. reload bookings or focus charger)
+    // Notify parent to update dashboard (e.g. calculate route to destination, focus charger, reload bookings)
     if (result.actionResult) {
       onActionTrigger(result.actionResult);
     }
@@ -133,7 +197,6 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
       setLastAudioBase64(result.audioBase64);
       playBase64Audio(result.audioBase64);
     } else {
-      // Browser SpeechSynthesis fallback if Sarvam API key is pending
       speakWithBrowser(result.responseText, result.language);
     }
   };
@@ -182,7 +245,7 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
           className={`voice-pulse-btn w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl shadow-2xl transition duration-300 ${
             status === 'listening' ? 'listening' : ''
           }`}
-          title="Sarvam AI Voice Assistant"
+          title="Sarvam AI Voice Assistant (Tamil / English)"
           aria-label="Open Sarvam AI Voice Assistant"
         >
           {status === 'listening' ? '⏹' : '🎙'}
@@ -191,14 +254,14 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
 
       {/* Expandable Assistant Drawer / Window */}
       {isOpen && (
-        <div className="fixed bottom-24 right-6 w-[380px] max-w-[calc(100vw-32px)] bg-white border border-[#dce3d5] rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col animate-slideUp font-sans">
+        <div className="fixed bottom-24 right-6 w-[390px] max-w-[calc(100vw-32px)] bg-white border border-[#dce3d5] rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col animate-slideUp font-sans">
           {/* Header */}
           <div className="bg-[#252b24] text-white p-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-lime-400 text-lg">ϟ</span>
               <div>
                 <h3 className="text-sm font-bold font-display">Sarvam AI Assistant</h3>
-                <small className="text-[10px] text-lime-300 block">Saaras STT · Bulbul TTS · Tamil / English</small>
+                <small className="text-[10px] text-lime-300 block">Saaras STT · Bulbul TTS · Route & Charger Finder</small>
               </div>
             </div>
             <button
@@ -227,12 +290,12 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
                 />
                 <span className="font-semibold text-gray-700 capitalize">
                   {status === 'listening'
-                    ? 'Listening... (Speak now)'
+                    ? 'Listening... (Speak your request)'
                     : status === 'processing'
                     ? 'Processing with Sarvam AI...'
                     : status === 'speaking'
                     ? 'Speaking response...'
-                    : 'Ready for command'}
+                    : 'Ready for voice command'}
                 </span>
               </div>
               <span className="text-[10px] font-bold bg-[#edf2e7] text-lime-900 px-2 py-0.5 rounded">
@@ -243,11 +306,11 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
             {/* Transcript Card */}
             {transcript && (
               <div className="bg-white p-3 rounded-lg border border-gray-100 shadow-sm text-xs">
-                <span className="text-[10px] text-gray-400 uppercase font-bold block mb-1">You said:</span>
+                <span className="text-[10px] text-gray-400 uppercase font-bold block mb-1">Recognized Voice:</span>
                 <p className="font-medium text-gray-800">"{transcript}"</p>
                 {detectedIntent && (
-                  <span className="inline-block mt-2 text-[9px] font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
-                    Intent: {detectedIntent}
+                  <span className="inline-block mt-2 text-[9px] font-bold bg-lime-100 text-lime-900 px-2 py-0.5 rounded">
+                    Action: {detectedIntent}
                   </span>
                 )}
               </div>
@@ -262,7 +325,7 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
                     onClick={replayAudio}
                     className="text-[11px] text-lime-800 font-bold hover:underline flex items-center gap-1"
                   >
-                    <span>🔊</span> Replay
+                    <span>🔊</span> Replay Voice
                   </button>
                 </div>
                 <p className="text-gray-900 leading-relaxed font-medium">{responseText}</p>
@@ -274,9 +337,9 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
               {status === 'listening' ? (
                 <button
                   onClick={stopRecording}
-                  className="bg-red-500 hover:bg-red-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-md transition"
+                  className="bg-red-500 hover:bg-red-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-md transition flex items-center gap-2 mx-auto animate-pulse"
                 >
-                  ■ Stop Recording & Send
+                  <span>■</span> Done Speaking / Send Command
                 </button>
               ) : (
                 <button
@@ -284,7 +347,7 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
                   disabled={status === 'processing'}
                   className="primary-button text-xs font-bold py-2.5 px-6 mx-auto shadow-md"
                 >
-                  <span>🎙</span> Tap to Speak (Tamil or English)
+                  <span>🎙</span> Tap & Speak (Tamil or English)
                 </button>
               )}
             </div>
@@ -292,20 +355,13 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
             {/* Sample Command Suggestions */}
             <div>
               <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1.5">
-                Quick voice prompts (Click to try):
+                Try voice prompts (Click to speak):
               </span>
               <div className="flex flex-wrap gap-1.5">
                 {sampleCommands.map((cmd, i) => (
                   <button
                     key={i}
-                    onClick={() => {
-                      setTextInput(cmd.text);
-                      setTranscript(cmd.text);
-                      voiceApi
-                        .processCommand({ text: cmd.text, lat: 13.0827, lng: 80.2707 })
-                        .then(handleAssistantResult)
-                        .catch(() => setResponseText('Error executing command'));
-                    }}
+                    onClick={() => processTextCommand(cmd.text)}
                     className="text-[10.5px] bg-white hover:bg-[#eff5e6] text-gray-700 font-medium px-2.5 py-1 rounded-md border border-gray-200 transition text-left"
                   >
                     "{cmd.text}"
@@ -319,7 +375,7 @@ export default function SarvamVoiceAssistant({ onActionTrigger = () => {} }) {
           <form onSubmit={handleTextSubmit} className="p-2.5 border-t border-gray-200 bg-white flex items-center gap-2">
             <input
               type="text"
-              placeholder="Or type voice command in Tamil/English..."
+              placeholder="Or type command: 'Guide me to Adyar'..."
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
               className="flex-1 text-xs px-3 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-lime-400"

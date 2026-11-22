@@ -131,8 +131,34 @@ export default function MyBookingsView({ onExploreChargers, onOpenAuth }) {
                     <div className="mt-1">
                       <span className="text-[10px] text-gray-400 uppercase font-bold block">Total Amount</span>
                       <strong className="text-green-800">{b.isFree ? 'Free' : `₹${b.totalAmount}`}</strong>
+                      {b.paymentMethod && (
+                        <span className="ml-1 text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-semibold">
+                          {b.paymentMethod}
+                        </span>
+                      )}
                     </div>
                   </div>
+
+                  {/* QR Code Pass for Host Verification */}
+                  {isCancellable && (
+                    <div className="mt-3 p-3 bg-white rounded border border-gray-200 flex items-center gap-3">
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=${encodeURIComponent(
+                          `WATTSTOP-PASS|ID:${b._id}|CODE:${b.verificationCode || 'PASS'}|DRIVER:${user?.name || 'Driver'}|SLOT:${b.date}-${b.startTime}`
+                        )}&color=20-37-31&bgcolor=248-249-246`}
+                        alt="QR Pass"
+                        className="w-16 h-16 rounded border border-gray-100 shadow-sm flex-shrink-0"
+                      />
+                      <div className="text-[11px] leading-tight text-gray-600">
+                        <strong className="text-gray-900 block font-mono">
+                          HOST PASS: {b.verificationCode || 'WATT-VERIFIED'}
+                        </strong>
+                        <span className="text-[10px] text-gray-500">
+                          Show this QR code to the host at the gate to scan and verify your identity before plugging in.
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {charger.instructions && (
                     <div className="mt-3 text-[11px] text-gray-600 bg-[#f0f5e9] p-2.5 rounded border border-[#ddebce]">

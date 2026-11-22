@@ -186,8 +186,34 @@ exports.processVoiceCommand = async (req, res) => {
         break;
       }
 
-      case 'NAVIGATE':
       case 'FIND_ROUTE':
+      case 'NAVIGATE': {
+        const destQuery = parsed.parameters.destination || parsed.parameters.location || 'Adyar';
+        const filters = {};
+        if (parsed.parameters.connectorType) filters.connectorType = parsed.parameters.connectorType;
+        if (parsed.parameters.acDcType) filters.acDcType = parsed.parameters.acDcType;
+
+        const chargers = await findNearbyChargers(userLng, userLat, 35, filters);
+        actionResult = {
+          type: 'ROUTE_GUIDANCE',
+          destination: destQuery,
+          chargers,
+          count: chargers.length
+        };
+
+        if (chargers.length > 0) {
+          const closest = chargers[0];
+          responseText = isTamil
+            ? `${destQuery} செல்லும் வழியில் சார்ஜர்கள் கண்டறியப்பட்டன. வரைபடத்தில் பாதை கணக்கிடப்படுகிறது. வழியில் உள்ள சார்ஜர்: ${closest.name}.`
+            : `Calculating route towards ${destQuery}. Found ${chargers.length} chargers along your path, including ${closest.name} (${closest.distanceKm} km away).`;
+        } else {
+          responseText = isTamil
+            ? `${destQuery}-க்கு பாதை கணக்கிடப்படுகிறது.`
+            : `Calculating live navigation route towards ${destQuery}.`;
+        }
+        break;
+      }
+
       case 'FIND_NEARBY':
       default: {
         const filters = {};

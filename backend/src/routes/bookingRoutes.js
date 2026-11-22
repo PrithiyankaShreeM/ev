@@ -13,9 +13,9 @@ const { protect, authorize } = require('../middleware/auth');
 // Public or Driver availability check
 router.get('/check-availability', checkAvailability);
 
-// Driver routes
-router.post('/', protect, authorize('driver'), createBooking);
-router.get('/my-bookings', protect, authorize('driver'), getMyBookings);
+// Booking routes - accessible to authenticated drivers and hosts
+router.post('/', protect, createBooking);
+router.get('/my-bookings', protect, getMyBookings);
 router.patch('/:id/cancel', protect, cancelBooking);
 
 // Homeowner routes

@@ -46,6 +46,15 @@ const bookingSchema = new mongoose.Schema(
       enum: ['pending', 'confirmed', 'cancelled', 'rejected', 'completed'],
       default: 'confirmed'
     },
+    paymentMethod: {
+      type: String,
+      enum: ['UPI', 'Card', 'Cash', 'Free'],
+      default: 'UPI'
+    },
+    verificationCode: {
+      type: String,
+      default: ''
+    },
     vehicleInfo: {
       type: String,
       default: 'EV'

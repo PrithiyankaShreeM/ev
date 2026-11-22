@@ -10,6 +10,7 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
   const [startTime, setStartTime] = useState('10:00');
   const [endTime, setEndTime] = useState('12:00');
   const [vehicleInfo, setVehicleInfo] = useState(user?.vehicle?.model || 'Tata Nexon EV');
+  const [paymentMethod, setPaymentMethod] = useState('UPI'); // 'UPI' | 'Card' | 'Cash'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successBooking, setSuccessBooking] = useState(null);
@@ -45,7 +46,8 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
         date,
         startTime,
         endTime,
-        vehicleInfo
+        vehicleInfo,
+        paymentMethod: charger.isFree ? 'Free' : paymentMethod
       });
 
       setSuccessBooking(res.booking);
@@ -57,9 +59,16 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
     }
   };
 
+  // Generate QR code data URL using SVG
+  const qrVerificationCode = successBooking?.verificationCode || `WATT-${Math.floor(1000 + Math.random() * 9000)}`;
+  const qrDataText = encodeURIComponent(
+    `WATTSTOP-PASS|ID:${successBooking?._id || 'TEMP'}|CODE:${qrVerificationCode}|DRIVER:${user?.name || 'Driver'}|CHARGER:${charger.name}|DATE:${date}`
+  );
+  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${qrDataText}&color=20-37-31&bgcolor=248-249-246`;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop animate-fadeIn">
-      <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-gray-100 relative">
+      <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-gray-100 relative max-h-[92vh] overflow-y-auto">
         <button
           onClick={onClose}
           className="dialog-close absolute top-5 right-5 text-gray-400 hover:text-black font-bold text-lg"
@@ -68,22 +77,42 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
         </button>
 
         {successBooking ? (
-          <div className="text-center py-4 space-y-4">
-            <div className="w-14 h-14 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-2xl mx-auto">
+          <div className="text-center py-2 space-y-4">
+            <div className="w-12 h-12 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xl mx-auto">
               ✓
             </div>
-            <span className="mini-label">RESERVATION CONFIRMED</span>
+            <span className="mini-label">RESERVATION & ENTRY PASS CONFIRMED</span>
             <h2 className="text-2xl font-bold font-display">You're All Set!</h2>
             <p className="text-xs text-gray-500">
-              Your charging stop at <strong>{charger.name}</strong> is booked for{' '}
-              <strong>{date}</strong> from <strong>{startTime}</strong> to <strong>{endTime}</strong>.
+              Charging reserved at <strong>{charger.name}</strong> for{' '}
+              <strong>{date}</strong> ({startTime} - {endTime}).
             </p>
+
+            {/* Host Verification QR Code */}
+            <div className="p-4 bg-[#f8f9f6] rounded-xl border border-gray-200 text-center space-y-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-lime-800 block">
+                Show this QR Code to Host for Verification
+              </span>
+              <div className="flex justify-center p-2 bg-white rounded-lg border border-gray-100 shadow-inner w-fit mx-auto">
+                <img
+                  src={qrImageUrl}
+                  alt="Host Verification QR Code"
+                  className="w-40 h-40 object-contain rounded"
+                />
+              </div>
+              <div className="text-xs font-mono font-bold text-gray-800 bg-gray-100 py-1 px-3 rounded inline-block">
+                PASS CODE: {qrVerificationCode}
+              </div>
+              <p className="text-[10px] text-gray-500">
+                The host will scan or verify this code upon arrival to activate the plug.
+              </p>
+            </div>
 
             <div className="p-3 bg-[#f8f9f6] rounded-md text-xs border border-gray-200 text-left space-y-1">
               <div>Address: <strong>{charger.address}</strong></div>
-              <div>Connector: <strong>{charger.connectorType} ({charger.capacityKw} kW)</strong></div>
-              <div>Estimated Cost: <strong>{charger.isFree ? 'Free' : `₹${estimatedCost}`}</strong></div>
-              <div>Instructions: <em>{charger.instructions || 'Ring bell upon arrival.'}</em></div>
+              <div>Payment Mode: <strong className="text-green-700 font-bold">{successBooking.paymentMethod || paymentMethod}</strong></div>
+              <div>Total Amount: <strong>{charger.isFree ? 'Free' : `₹${successBooking.totalAmount || estimatedCost}`}</strong></div>
+              <div>Host Instructions: <em>{charger.instructions || 'Ring bell upon arrival.'}</em></div>
             </div>
 
             <button onClick={onClose} className="primary-button w-full justify-center">
@@ -149,6 +178,55 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
                 />
               </div>
 
+              {/* Payment Method Selector (UPI / Card / Cash) */}
+              {!charger.isFree && (
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1.5">
+                    Select Payment Method:
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('UPI')}
+                      className={`p-2.5 rounded-lg border font-bold text-xs flex flex-col items-center gap-1 transition ${
+                        paymentMethod === 'UPI'
+                          ? 'border-lime-500 bg-lime-50 text-black ring-1 ring-lime-400'
+                          : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-base">📱</span>
+                      <span>UPI Pay</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('Card')}
+                      className={`p-2.5 rounded-lg border font-bold text-xs flex flex-col items-center gap-1 transition ${
+                        paymentMethod === 'Card'
+                          ? 'border-lime-500 bg-lime-50 text-black ring-1 ring-lime-400'
+                          : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-base">💳</span>
+                      <span>Card / Net</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('Cash')}
+                      className={`p-2.5 rounded-lg border font-bold text-xs flex flex-col items-center gap-1 transition ${
+                        paymentMethod === 'Cash'
+                          ? 'border-lime-500 bg-lime-50 text-black ring-1 ring-lime-400'
+                          : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-base">💵</span>
+                      <span>Cash at Host</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Price Calculation Summary */}
               <div className="p-3 bg-[#f0f5e9] rounded-md border border-[#ddebce]">
                 <div className="flex justify-between items-center mb-1">
@@ -160,11 +238,16 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
                   <span className="text-gray-900">{charger.isFree ? 'Free to charge' : `₹${pricePerHour}/hr`}</span>
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t border-[#ddebce] text-sm">
-                  <span className="font-bold text-gray-800">Total Estimated Cost:</span>
+                  <span className="font-bold text-gray-800">Total Payable:</span>
                   <strong className="text-green-800 font-display text-base">
                     {charger.isFree ? 'Free' : `₹${estimatedCost}`}
                   </strong>
                 </div>
+                {!charger.isFree && (
+                  <div className="text-[10px] text-gray-500 mt-1">
+                    Selected payment: <strong>{paymentMethod}</strong> (Includes entry QR pass)
+                  </div>
+                )}
               </div>
 
               <button
@@ -172,7 +255,7 @@ export default function BookingModal({ charger, isOpen, onClose, onBookingSucces
                 disabled={loading}
                 className="primary-button w-full justify-center py-3 text-xs font-bold"
               >
-                {loading ? 'Confirming with Host...' : 'Confirm Reservation ↗'}
+                {loading ? 'Confirming Reservation & Generating Pass...' : 'Confirm & Generate Host QR Pass ↗'}
               </button>
             </form>
           </>
